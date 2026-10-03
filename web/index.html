@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#16181d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="P/ECE">
+  <title>Web P/ECE</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ============ LIBRARY ============ -->
+  <section id="library" class="view active">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>P/ECE</h1>
+          <p id="lib-status" class="muted">Starting…</p>
+        </div>
+      </div>
+      <button id="btn-menu" class="icon-btn" aria-label="Settings">⋯</button>
+    </header>
+
+    <div id="system-banner" class="banner hidden">
+      <div><strong>One-time setup:</strong> the P/ECE's system software is not included. Aquaplus offers it as a free download: get <code>update120.exe</code> from <a href="https://aquaplus.jp/piece/dl/update120.html" target="_blank" rel="noopener">the official update page</a> and choose it here. (An <code>all.bin</code>, or a <code>.pfi</code> image from another emulator, works too.) It stays on this device.</div>
+      <div class="banner-row">
+        <label class="btn primary small">Choose the system file…<input class="import-input" type="file" multiple hidden></label>
+      </div>
+    </div>
+    <div id="games-banner" class="banner hidden">
+      <div><strong>No games are included.</strong> Import P/ECE programs: a <code>.pex</code> with the files that came with it, or the download as it is (<code>.zip</code>, <code>.lzh</code>, or one of Aquaplus's self-extracting <code>.exe</code> files). Each game gets a P/ECE of its own.</div>
+      <div class="banner-row">
+        <label class="btn primary small">Import a game…<input class="import-input" type="file" multiple hidden></label>
+        <button id="btn-plain" class="btn small">Just start the P/ECE</button>
+      </div>
+    </div>
+
+    <main id="lib-content">
+      <h2 class="section-title">Games</h2>
+      <div id="game-grid" class="game-grid"></div>
+      <p id="no-games" class="empty hidden">No games yet.</p>
+
+      <h2 class="section-title">P/ECE units</h2>
+      <div id="unit-list" class="card-list"></div>
+
+      <div class="import-row">
+        <label class="btn">Import a game or flash image…<input class="import-input" type="file" multiple hidden></label>
+        <button id="btn-new-unit" class="btn">New empty unit</button>
+      </div>
+    </main>
+    <input id="add-input" type="file" multiple hidden>
+  </section>
+
+  <!-- ============ PLAYER ============ -->
+  <section id="player" class="view">
+    <header class="player-bar">
+      <button id="btn-back" class="icon-btn" aria-label="Switch off and go back">‹</button>
+      <div class="player-title">
+        <span id="game-title">—</span>
+        <span id="game-sub" class="muted"></span>
+      </div>
+      <button id="btn-sound" class="icon-btn" aria-label="Sound">🔈</button>
+      <button id="btn-pmenu" class="icon-btn" aria-label="Options">⋯</button>
+    </header>
+
+    <div class="device-wrap">
+      <div class="piece" id="device">
+        <div class="piece-screen">
+          <div class="piece-glass"><canvas id="lcd" width="128" height="88" aria-label="P/ECE screen"></canvas></div>
+          <span class="piece-logo" aria-hidden="true">P/ECE</span>
+        </div>
+        <div class="dpad" id="dpad" aria-label="Direction buttons"><span class="dpad-v"></span><span class="dpad-h"></span></div>
+        <div class="piece-ab">
+          <button class="pbtn round" data-btn="16" aria-label="B"><span>B</span></button>
+          <button class="pbtn round" data-btn="32" aria-label="A"><span>A</span></button>
+        </div>
+        <div class="piece-small">
+          <button class="pbtn oval" data-btn="64" aria-label="Select"><span>SELECT</span></button>
+          <button class="pbtn oval" data-btn="128" aria-label="Start"><span>START</span></button>
+        </div>
+      </div>
+      <p id="player-note" class="note hidden"></p>
+    </div>
+  </section>
+
+  <!-- ============ SHEETS / DIALOGS ============ -->
+  <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true">
+    <div class="sheet-panel">
+      <h3 id="sheet-title"></h3>
+      <div id="sheet-body"></div>
+      <div id="sheet-actions" class="sheet-actions"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

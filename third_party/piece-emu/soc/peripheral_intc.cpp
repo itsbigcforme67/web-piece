@@ -1,0 +1,314 @@
+#include "peripheral_intc.hpp"
+#include "bus.hpp"
+
+// ============================================================================
+// Source table: IrqSource → (trap_no, pri_byte, pri_shift, ien_byte, ien_bit,
+//                             isr_byte, isr_bit)
+//
+// Priority register layout (c_INTCtag, offsets within regs_[]):
+//   [0]  rPP01L   — Port 0 [2:0], Port 1 [6:4]
+//   [1]  rPP23L   — Port 2 [2:0], Port 3 [6:4]
+//   [2]  rPK01L   — Key 0 [2:0], Key 1 [6:4]
+//   [3]  rPHSD01L — HSDMA0 [2:0], HSDMA1 [6:4]
+//   [4]  rPHSD23L — HSDMA2 [2:0], HSDMA3 [6:4]
+//   [5]  rPDM     — IDMA [2:0]
+//   [6]  rP16T01  — T16_0 [2:0], T16_1 [6:4]
+//   [7]  rP16T23  — T16_2 [2:0], T16_3 [6:4]
+//   [8]  rP16T45  — T16_4 [2:0], T16_5 [6:4]
+//   [9]  rP8TM_PSIO0  — T8(0-3) [2:0], SIF0 [6:4]
+//   [10] rPSIO1_PAD   — SIF1 [2:0], AD [6:4]
+//   [11] rPCTM    — CLK_TIMER [2:0]
+//   [12] rPP45L   — Port 4 [2:0], Port 5 [6:4]
+//   [13] rPP67L   — Port 6 [2:0], Port 7 [6:4]
+//
+// IEN register layout (offsets 16..23 = rIEN1..rIEN8):
+//   [16] rIEN1 — Port0[0], Port1[1], Port2[2], Port3[3], Key0[4], Key1[5]
+//   [17] rIEN2 — HSDMA0[0], HSDMA1[1], HSDMA2[2], HSDMA3[3], IDMA[4]
+//   [18] rIEN3 — T16_CRB0[2], T16_CRA0[3], T16_CRB1[6], T16_CRA1[7]
+//   [19] rIEN4 — T16_CRB2[2], T16_CRA2[3], T16_CRB3[6], T16_CRA3[7]
+//   [20] rIEN5 — T16_CRB4[2], T16_CRA4[3], T16_CRB5[6], T16_CRA5[7]
+//   [21] rIEN6 — T8_UF0[0], T8_UF1[1], T8_UF2[2], T8_UF3[3]
+//   [22] rIEN7 — SIF0_ERR[0], SIF0_RX[1], SIF0_TX[2], SIF1_ERR[3], SIF1_RX[4], SIF1_TX[5]
+//   [23] rIEN8 — AD[0], CLK_TIMER[1], Port4[2], Port5[3], Port6[4], Port7[5]
+//
+// ISR register layout (offsets 32..39 = rISR1..rISR8): same bit positions as IEN.
+//
+// Trap numbers (from piemu/include/c33209e.h TRAP_ defines):
+//   PORT0-3: 16-19, KEY0-1: 20-21
+//   HSDMA0-3: 22-25, IDMA: 26
+//   T16_CRB0: 30, T16_CRA0: 31, T16_CRB1: 34, T16_CRA1: 35
+//   T16_CRB2: 38, T16_CRA2: 39, T16_CRB3: 42, T16_CRA3: 43
+//   T16_CRB4: 46, T16_CRA4: 47, T16_CRB5: 50, T16_CRA5: 51
+//   T8_UF0-3: 52-55
+//   SIF0_ERR: 56, SIF0_RX: 57, SIF0_TX: 58
+//   SIF1_ERR: 60, SIF1_RX: 61, SIF1_TX: 62
+//   AD: 64, CLK_TIMER: 65
+//   PORT4-7: 68-71
+// ============================================================================
+
+using Src = InterruptController::IrqSource;
+
+const InterruptController::SrcInfo
+InterruptController::src_table_[static_cast<int>(Src::NUM_SOURCES)] = {
+    // src          trap  pri_b shi  ien_b  ien_bit  isr_b  isr_bit
+    /* PORT0   */ {  16,    0,   0,   16,    0,       32,    0 },
+    /* PORT1   */ {  17,    0,   4,   16,    1,       32,    1 },
+    /* PORT2   */ {  18,    1,   0,   16,    2,       32,    2 },
+    /* PORT3   */ {  19,    1,   4,   16,    3,       32,    3 },
+    /* KEY0    */ {  20,    2,   0,   16,    4,       32,    4 },
+    /* KEY1    */ {  21,    2,   4,   16,    5,       32,    5 },
+    /* HSDMA0  */ {  22,    3,   0,   17,    0,       33,    0 },
+    /* HSDMA1  */ {  23,    3,   4,   17,    1,       33,    1 },
+    /* HSDMA2  */ {  24,    4,   0,   17,    2,       33,    2 },
+    /* HSDMA3  */ {  25,    4,   4,   17,    3,       33,    3 },
+    /* IDMA    */ {  26,    5,   0,   17,    4,       33,    4 },
+    /* T16_CRB0*/ {  30,    6,   0,   18,    2,       34,    2 },
+    /* T16_CRA0*/ {  31,    6,   0,   18,    3,       34,    3 },
+    /* T16_CRB1*/ {  34,    6,   4,   18,    6,       34,    6 },
+    /* T16_CRA1*/ {  35,    6,   4,   18,    7,       34,    7 },
+    /* T16_CRB2*/ {  38,    7,   0,   19,    2,       35,    2 },
+    /* T16_CRA2*/ {  39,    7,   0,   19,    3,       35,    3 },
+    /* T16_CRB3*/ {  42,    7,   4,   19,    6,       35,    6 },
+    /* T16_CRA3*/ {  43,    7,   4,   19,    7,       35,    7 },
+    /* T16_CRB4*/ {  46,    8,   0,   20,    2,       36,    2 },
+    /* T16_CRA4*/ {  47,    8,   0,   20,    3,       36,    3 },
+    /* T16_CRB5*/ {  50,    8,   4,   20,    6,       36,    6 },
+    /* T16_CRA5*/ {  51,    8,   4,   20,    7,       36,    7 },
+    /* T8_UF0  */ {  52,    9,   0,   21,    0,       37,    0 },
+    /* T8_UF1  */ {  53,    9,   0,   21,    1,       37,    1 },
+    /* T8_UF2  */ {  54,    9,   0,   21,    2,       37,    2 },
+    /* T8_UF3  */ {  55,    9,   0,   21,    3,       37,    3 },
+    /* SIF0_ERR*/ {  56,    9,   4,   22,    0,       38,    0 },
+    /* SIF0_RX */ {  57,    9,   4,   22,    1,       38,    1 },
+    /* SIF0_TX */ {  58,    9,   4,   22,    2,       38,    2 },
+    /* SIF1_ERR*/ {  60,   10,   0,   22,    3,       38,    3 },
+    /* SIF1_RX */ {  61,   10,   0,   22,    4,       38,    4 },
+    /* SIF1_TX */ {  62,   10,   0,   22,    5,       38,    5 },
+    /* AD      */ {  64,   10,   4,   23,    0,       39,    0 },
+    /* CLK_TIMER*/{  65,   11,   0,   23,    1,       39,    1 },
+    /* PORT4   */ {  68,   12,   0,   23,    2,       39,    2 },
+    /* PORT5   */ {  69,   12,   4,   23,    3,       39,    3 },
+    /* PORT6   */ {  70,   13,   0,   23,    4,       39,    4 },
+    /* PORT7   */ {  71,   13,   4,   23,    5,       39,    5 },
+};
+
+void InterruptController::reset()
+{
+    for (auto& r : regs_) r = 0;
+    // S1C33209 Tech Manual B-II-5-20: initial reset sets RSTONLY=1 and
+    // similarly IDMAONLY=1, DENONLY=1 — all three "reset-only" defaults.
+    // The kernel later writes 0x06 to 0x4029F (RSTONLY=0, IDMAONLY=1,
+    // DENONLY=1) so its `bp[isr] &= ~mask` pattern works as write-replace.
+    regs_[63] = 0x07;
+    for (auto& v : level_override_) v = -1;
+    current_il_ = 0;
+    poll_dirty_ = true;
+}
+
+void InterruptController::attach(Bus& bus,
+                                  std::function<void(int, int)> assert_trap)
+{
+    assert_trap_ = std::move(assert_trap);
+    for (auto& v : level_override_) v = -1;
+
+    // Register I/O handlers for 0x040260..0x04029F (32 halfwords = 64 bytes)
+    for (uint32_t off = 0; off < REG_COUNT; off += 2) {
+        uint32_t addr = BASE_ADDR + off;
+        bus.register_io(addr, {
+            [this, off](uint32_t) -> uint16_t {
+                return io_read(off);
+            },
+            [this, off](uint32_t addr, uint16_t val) {
+                io_write(off, addr, val);
+            },
+            // Byte-precise variant: only the targeted byte changes.
+            // Critical for ISR-clear writes ("bp[isr] &= ~mask") so a
+            // byte write doesn't accidentally clear the adjacent ISR byte.
+            [this, off](uint32_t addr, uint8_t val) {
+                io_write_byte(off, addr, val);
+            }
+        });
+    }
+}
+
+void InterruptController::io_write_byte(uint32_t off, uint32_t addr, uint8_t val)
+{
+    // Direct byte write — write_byte logic with the addressed byte only.
+    bool rstonly = (regs_[63] & 0x01) != 0;
+    int byte_off = static_cast<int>(off) + ((addr & 1) ? 1 : 0);
+    if (byte_off >= 32 && byte_off <= 39) {
+        uint8_t before = regs_[byte_off];
+        if (rstonly) regs_[byte_off] &= ~val; // write 1 clears, write 0 preserves
+        else         regs_[byte_off]  = val;  // write replaces
+        uint8_t cleared = before & ~regs_[byte_off];
+        if (cleared) {
+            for (int i = 0; i < static_cast<int>(IrqSource::NUM_SOURCES); i++) {
+                const SrcInfo& info = src_table_[i];
+                if (info.isr_byte == byte_off
+                        && (cleared & (1 << info.isr_bit))) {
+                    level_override_[i] = -1;
+                }
+            }
+        }
+    } else {
+        regs_[byte_off] = val;
+    }
+    if ((byte_off < 14) || (byte_off >= 16 && byte_off < 24)
+            || (byte_off >= 32 && byte_off < 40))
+        poll_dirty_ = true;
+}
+
+uint16_t InterruptController::io_read(uint32_t off)
+{
+    // Little-endian halfword read from two consecutive bytes
+    return static_cast<uint16_t>(regs_[off]) |
+           (static_cast<uint16_t>(regs_[off + 1]) << 8);
+}
+
+void InterruptController::io_write(uint32_t off, uint32_t addr, uint16_t val)
+{
+    // ISR registers are at offsets 32..39 in regs_[].
+    // ISR write semantics depend on rRESET.RSTONLY (bit 0 of byte at offset 63):
+    //
+    //   RSTONLY=0 (default): ISR is fully read/write.  Writing 0 clears the flag,
+    //                        writing 1 force-sets it.  The kernel uses
+    //                        read-modify-write "bp[isr] &= ~mask" to clear a
+    //                        specific bit — this is the normal case (kernel sets
+    //                        bp[0x29f]=0x06 which leaves RSTONLY=0).
+    //
+    //   RSTONLY=1:           write-1-clears, write-0-no-effect.  Used by
+    //                        clippce's internal_8tu_isr — it reads the ISR
+    //                        snapshot, then writes the snapshot back under
+    //                        RSTONLY=1 to clear every flag that was set.
+    //                        Inverting this semantic (write-1-PRESERVES) would
+    //                        latch the IRQ forever and re-enter the ISR after
+    //                        every reti, which is exactly what stalled luaspd
+    //                        in c_prog2's fmodf loop.
+    bool rstonly = (regs_[63] & 0x01) != 0;
+
+    auto write_byte = [&](int byte_off, uint8_t byte_val) {
+        if (byte_off >= 32 && byte_off <= 39) {
+            // ISR register: selective clear
+            uint8_t before = regs_[byte_off];
+            if (rstonly) {
+                regs_[byte_off] &= ~byte_val; // write 1 clears
+            } else {
+                regs_[byte_off] = byte_val;   // write replaces
+            }
+            // Clear per-source level overrides for any bits that transitioned
+            // from 1 → 0 (i.e. were just acknowledged by the kernel).
+            uint8_t cleared = before & ~regs_[byte_off];
+            if (cleared) {
+                for (int i = 0; i < static_cast<int>(IrqSource::NUM_SOURCES); i++) {
+                    const SrcInfo& info = src_table_[i];
+                    if (info.isr_byte == byte_off
+                            && (cleared & (1 << info.isr_bit))) {
+                        level_override_[i] = -1;
+                    }
+                }
+            }
+        } else {
+            regs_[byte_off] = byte_val;
+        }
+    };
+
+    if (addr & 1) {
+        // Byte write to odd address: only update the high byte (regs_[off+1]).
+        // The bus passes the byte value in the low bits of val.
+        write_byte(static_cast<int>(off) + 1, static_cast<uint8_t>(val));
+    } else {
+        // Halfword write or byte write to even address: update both bytes.
+        write_byte(static_cast<int>(off),     static_cast<uint8_t>(val));
+        write_byte(static_cast<int>(off) + 1, static_cast<uint8_t>(val >> 8));
+    }
+
+    // Any write to priority (0..13), IEN (16..23), or ISR (32..39) regs
+    // may change the poll decision.  Writes to IDMA/RESET regs (48..63) do
+    // not affect interrupt delivery; skip the dirty mark for them.
+    int end = static_cast<int>(off) + 2;
+    if ((off < 14) || (off >= 16 && off < 24) || (end > 32 && off < 40))
+        poll_dirty_ = true;
+}
+
+void InterruptController::raise(IrqSource src, int level_override)
+{
+    int idx = static_cast<int>(src);
+    if (level_override >= 0) {
+        level_override_[idx] = static_cast<int8_t>(level_override & 0x07);
+    }
+    try_deliver(src, level_override);
+}
+
+void InterruptController::poll()
+{
+    // Fast path: nothing has changed since the last poll, so the decision
+    // will be the same.  ISR writes, raise(), and set_current_il() (on an
+    // IL drop) mark poll_dirty_.  This skip captures >99% of do_tick()
+    // calls when no interrupts are pending.
+    if (!poll_dirty_) return;
+
+    // Scan ISR registers for set bits.  For each, check IEN; if enabled
+    // and priority > current_il_, deliver.  Higher priority wins when
+    // multiple sources are pending.
+    int best = -1;
+    int best_level = 0;
+    int best_override = -1;
+    for (int i = 0; i < static_cast<int>(IrqSource::NUM_SOURCES); i++) {
+        const SrcInfo& info = src_table_[i];
+        if (!(regs_[info.isr_byte] & (1 << info.isr_bit))) continue;
+        if (!(regs_[info.ien_byte] & (1 << info.ien_bit))) continue;
+        int level;
+        int8_t ov = level_override_[i];
+        if (ov >= 0) {
+            level = ov;
+        } else {
+            level = (regs_[info.pri_byte] >> info.pri_shift) & 0x07;
+        }
+        if (level == 0) continue;
+        if (static_cast<uint32_t>(level) <= current_il_) continue;
+        if (level > best_level) {
+            best = i;
+            best_level = level;
+            best_override = ov;
+        }
+    }
+    // State has been fully evaluated.  Any future change (new raise(),
+    // register write, IL drop) will re-mark dirty.
+    poll_dirty_ = false;
+
+    if (best < 0) return;
+    if (best_override < 0 && level_override_[best] >= 0) {
+        // preserve override for possible future polls if delivery is rejected
+        // (e.g. CPU in delay-slot).  do_trap will defer in that case.
+    }
+    assert_trap_(src_table_[best].trap_no, best_level);
+}
+
+void InterruptController::try_deliver(IrqSource src, int level_override)
+{
+    int idx = static_cast<int>(src);
+    const SrcInfo& info = src_table_[idx];
+
+    // Set ISR flag unconditionally
+    regs_[info.isr_byte] |= static_cast<uint8_t>(1 << info.isr_bit);
+
+    // A new pending source: the next poll() must re-scan even if we can
+    // deliver right now (deferred-trap path may reject and leave the source
+    // pending for a later poll).
+    poll_dirty_ = true;
+
+    // Check interrupt enable
+    if (!(regs_[info.ien_byte] & (1 << info.ien_bit))) return;
+
+    int level;
+    if (level_override >= 0) {
+        level = level_override & 0x07;
+    } else {
+        // Get 3-bit priority level from the priority register
+        level = (regs_[info.pri_byte] >> info.pri_shift) & 0x07;
+    }
+    if (level == 0) return; // priority 0 = disabled
+
+    // Deliver to CPU (CPU will check IE and IL internally)
+    assert_trap_(info.trap_no, level);
+}

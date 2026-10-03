@@ -1,0 +1,23 @@
+# Never publish other people's files: the P/ECE system software, games, their data and flash images stay out of the repository.
+*.pex
+*.pfi
+*.bin
+*.exe
+*.lzh
+*.zip
+*.sav
+*.grp
+*.scr
+update/
+roms/
+
+# build output, editor files, local clutter
+tests/native_twin
+.pio/
+.vscode/
+__pycache__/
+*.pyc
+*.pgm
+shots/
+gmon.out
+.DS_Store
